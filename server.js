@@ -57,9 +57,9 @@ async function waitForProcessing(file) {
     return statusObject;
 }
 
-app.post('/api/generate-quiz', upload.single('video'), async (req, res) => {
+app.post('/api/generate-quiz', upload.single('file'), async (req, res) => {
     if (!req.file) {
-        return res.status(400).json({ error: 'No video file uploaded' });
+        return res.status(400).json({ error: 'No file uploaded' });
     }
 
     const filePath = req.file.path;
@@ -79,22 +79,41 @@ app.post('/api/generate-quiz', upload.single('video'), async (req, res) => {
         // Wait for the video processing to complete
         await waitForProcessing(uploadedFile);
 
-        // Generate content using the video
-        console.log('Generating quiz from video...');
+        const { difficulty, types, format } = req.body;
+        const parsedTypes = types ? JSON.parse(types) : {};
+
+        let typeInstructions = [];
+        if (parsedTypes.MCQ) typeInstructions.push("Multiple Choice Questions (4 options, specify index of correct option)");
+        if (parsedTypes.TrueFalse) typeInstructions.push("True/False Questions (Include options ['True', 'False'] and indicate correct index)");
+        if (parsedTypes.FillInBlank) typeInstructions.push("Fill in the Blank Questions (Provide 4 reasonable options to fill in the blank)");
+        if (parsedTypes.ShortDesc) typeInstructions.push("Short Answer Multiple Choice Questions (Give descriptive options for a concept)");
+
+        if (typeInstructions.length === 0) {
+            typeInstructions.push("Multiple Choice Questions");
+        }
+
+        // Generate content using the file
+        console.log(`Generating a ${difficulty || 'Medium'} quiz from ${format || 'Video'}...`);
         const prompt = `
-      You are an expert educational quiz generator.
-      Watch the attached video carefully and generate a multiple-choice quiz based ONLY on the content presented in the video.
+      You are an expert educator and assessment creator.
+      Review the attached ${format || 'educational file'} carefully and generate a quiz based ONLY on the content presented.
       
       Generate EXACTLY 5 high-quality questions.
+      The difficulty level MUST be: ${difficulty || 'Medium'}. Adjust the complexity of the terminology and concepts tested accordingly.
+      
+      The questions must be structured as one of the following requested types:
+      ${typeInstructions.join('\n      - ')}
+      MIX the question types if multiple are requested!
+      
       For each question:
       1. Provide a clear question statement.
-      2. Provide exactly 4 options.
+      2. Provide exactly 4 options. (Even for true/false or fill in the blank, generate 4 possible choices to maintain strict format).
       3. Specify the index (0-3) of the correct answer.
-      4. Provide a brief explanation of why the answer is correct based on the video.
+      4. Provide a brief explanation of why the answer is correct explicitly based on the text/audio/video content.
       
       CRITICAL INSTRUCTION: Your output MUST be ONLY a valid JSON array of objects. Do not include any markdown formatting like \`\`\`json or \`\`\`. Start directly with [ and end with ]. Do not include any introductory or concluding text.
 
-      The JSON structure should be:
+      The JSON structure should strictly be:
       [
         {
           "id": 1,
@@ -109,13 +128,8 @@ app.post('/api/generate-quiz', upload.single('video'), async (req, res) => {
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
             contents: [
-                {
-                    role: "user",
-                    parts: [
-                        { fileData: { fileUri: uploadedFile.uri, mimeType: uploadedFile.mimeType } },
-                        { text: prompt }
-                    ]
-                }
+                { fileData: { fileUri: uploadedFile.uri, mimeType: uploadedFile.mimeType } },
+                { text: prompt }
             ],
             config: {
                 temperature: 0.2, // Low temperature for more factual output
